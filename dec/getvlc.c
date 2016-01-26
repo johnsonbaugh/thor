@@ -39,6 +39,9 @@ int get_vlc0_limit(int maxbit,stream_t *str){
     nbit++;
   }
   code = tmp==0 ? maxbit : nbit - 1;
+
+  THOR_TRACE_VAL(str, code);
+
   return code;
 }
 
@@ -199,9 +202,12 @@ int get_vlc(int n,stream_t *str)
       val += (!tmp);
     }
   }
+  else
+  {
+      THOR_ERROR(str, "Illegal VLC table number. 0-10 allowed only.");
+  }
 
+  THOR_TRACE_VAL(str, val);
 
-  //else rferror("Illegal VLC table number. 0-10 allowed only.");
-  else printf("Illegal VLC table number. 0-10 allowed only.");
   return val;
 }

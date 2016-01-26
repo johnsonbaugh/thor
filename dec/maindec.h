@@ -27,9 +27,31 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #if !defined(_MAINDEC_H_)
 #define _MAINDEC_H_
 
+#include <setjmp.h>
 #include <stdio.h>
 #include "getbits.h"
 #include "types.h"
+
+#define ENABLE_PREDICTION_OUTPUT
+
+typedef struct ST_THOR_DPB {
+    int rec_available[MAX_REORDER_BUFFER];
+    int rec_buffer_idx;
+    int decode_frame_num;
+    //int frame_count;
+    int last_frame_output;
+
+    int rec_buffer_decode_frame_num[MAX_REORDER_BUFFER];
+    int rec_buffer_display_frame_num[MAX_REORDER_BUFFER];
+
+    yuv_frame_t rec_buf[MAX_REORDER_BUFFER];
+    yuv_frame_t ref_buf[MAX_REF_FRAMES];
+
+#ifdef ENABLE_PREDICTION_OUTPUT
+    yuv_frame_t pred_frame;
+#endif
+} st_thor_dpb;
+
 
 typedef struct 
 {
@@ -42,6 +64,8 @@ typedef struct
   int decode_order_frame_num;
   int display_frame_num;
   int interp_ref;
+  int clpf_frame;
+  int clpf_all;
 } frame_info_t;
 
 typedef struct
@@ -83,6 +107,9 @@ typedef struct
     int depth;
     int qmtx;
     qmtx_t *iwmatrix[52][3][2][TR_SIZE_RANGE];
+    
+    int decoding_mode;
+    st_thor_dpb dpb;
 } decoder_info_t;
 
 #endif

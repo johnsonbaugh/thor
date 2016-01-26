@@ -42,6 +42,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "inter_prediction.h"
 #include "intra_prediction.h"
 #include "simd.h"
+#include "thor_if.h"
 
 extern int chroma_qp[52];
 
@@ -121,6 +122,18 @@ void decode_and_reconstruct_block_inter (uint8_t *rec, int stride, int size, int
   thor_free(rblock);
   thor_free(rblock2);
 }
+
+#ifdef ENABLE_PREDICTION_OUTPUT
+void copy_pred_block(uint8_t* rec, int stride, int size, uint8_t* pblock)
+{
+    int i,j;
+    for(i=0;i<size;i++){
+      for (j=0;j<size;j++){
+        rec[i*stride+j] = (uint8_t)clip255((int16_t)pblock[i*size+j]);
+      }
+    }
+}
+#endif
 
 void copy_deblock_data(decoder_info_t *decoder_info, block_info_dec_t *block_info){
 
@@ -231,6 +244,8 @@ void decode_block(decoder_info_t *decoder_info,int size,int ypos,int xpos){
   read_block(decoder_info,stream,&block_info,frame_type);
   mode = block_info.block_param.mode;
 
+  if (decoder_info->decoding_mode != THOR_DEC_MODE_SYNTAX)
+  {
   if (mode == MODE_INTRA){
     /* Dequantize, inverse tranform, predict and reconstruct */
     intra_mode = block_info.block_param.intra_mode;
@@ -288,6 +303,27 @@ void decode_block(decoder_info_t *decoder_info,int size,int ypos,int xpos){
             rec_v[i*rec->stride_c+j] = (uint8_t)(((int)pblock0_v[i*sizeC+j] + (int)pblock1_v[i*sizeC+j])>>1);
           }
         }
+
+#ifdef ENABLE_PREDICTION_OUTPUT
+          if (decoder_info->decoding_mode == THOR_DEC_MODE_PRED)
+          {
+              yuv_frame_t* pred = &decoder_info->dpb.pred_frame;
+              int i,j;
+              for (i=0;i<bheight;i++){
+                for (j=0;j<bwidth;j++){
+                  pred->y[(yposY + i)*pred->stride_y+j + xposY] = (uint8_t)(((int)pblock0_y[i*sizeY+j] + (int)pblock1_y[i*sizeY+j])>>1);
+                }
+              }
+
+              for (i=0;i<bheight/2;i++){
+                for (j=0;j<bwidth/2;j++){
+                  pred->u[(yposC + i)*pred->stride_c+j + xposC] = (uint8_t)(((int)pblock0_u[i*sizeC+j] + (int)pblock1_u[i*sizeC+j])>>1);
+                  pred->v[(yposC + i)*pred->stride_c+j + xposC] = (uint8_t)(((int)pblock0_v[i*sizeC+j] + (int)pblock1_v[i*sizeC+j])>>1);
+                }
+              }
+          }
+#endif
+
         copy_deblock_data(decoder_info,&block_info);
       }
       else{
@@ -312,6 +348,22 @@ void decode_block(decoder_info_t *decoder_info,int size,int ypos,int xpos){
           memcpy(&rec_u[j*rec->stride_c],&pblock_u[j*sizeC],(bwidth/2)*sizeof(uint8_t));
           memcpy(&rec_v[j*rec->stride_c],&pblock_v[j*sizeC],(bwidth/2)*sizeof(uint8_t));
         }
+
+#ifdef ENABLE_PREDICTION_OUTPUT
+          if (decoder_info->decoding_mode == THOR_DEC_MODE_PRED)
+          {
+              yuv_frame_t* pred = &decoder_info->dpb.pred_frame;
+              int j;
+              for (j=0;j<bheight;j++){
+                memcpy(&pred->y[(yposY + j)*pred->stride_y + xposY],&pblock_y[j*sizeY],bwidth*sizeof(uint8_t));
+              }
+              for (j=0;j<bheight/2;j++){
+                memcpy(&pred->u[(yposC + j)*pred->stride_c + xposC],&pblock_u[j*sizeC],(bwidth/2)*sizeof(uint8_t));
+                memcpy(&pred->v[(yposC + j)*pred->stride_c + xposC],&pblock_v[j*sizeC],(bwidth/2)*sizeof(uint8_t));
+              }
+          }
+#endif
+
         copy_deblock_data(decoder_info,&block_info);
       }
       return;
@@ -462,12 +514,23 @@ void decode_block(decoder_info_t *decoder_info,int size,int ypos,int xpos){
       }
     }
 
+#ifdef ENABLE_PREDICTION_OUTPUT
+      if (decoder_info->decoding_mode == THOR_DEC_MODE_PRED)
+      {
+          yuv_frame_t* pred = &decoder_info->dpb.pred_frame;
+          copy_pred_block(&pred->y[yposY * pred->stride_y + xposY], pred->stride_y, sizeY, pblock_y);
+          copy_pred_block(&pred->u[yposC * pred->stride_c + xposC], pred->stride_c, sizeC, pblock_u);
+          copy_pred_block(&pred->v[yposC * pred->stride_c + xposC], pred->stride_c, sizeC, pblock_v);
+      }
+#endif
+
     /* Dequantize, invere tranform and reconstruct */
 
     decode_and_reconstruct_block_inter(rec_y,rec->stride_y,sizeY,qpY,pblock_y,coeff_y,tb_split,decoder_info->qmtx ? decoder_info->iwmatrix[qpY][0][0] : NULL);
     decode_and_reconstruct_block_inter(rec_u,rec->stride_c,sizeC,qpC,pblock_u,coeff_u,tb_split&&size>8,decoder_info->qmtx ? decoder_info->iwmatrix[qpY][1][0] : NULL);
     decode_and_reconstruct_block_inter(rec_v,rec->stride_c,sizeC,qpC,pblock_v,coeff_v,tb_split&&size>8,decoder_info->qmtx ? decoder_info->iwmatrix[qpY][2][0] : NULL);
   }
+  } // MODE_SYNTAX
 
   /* Copy deblock data to frame array */
   copy_deblock_data(decoder_info,&block_info);
@@ -503,18 +566,23 @@ int decode_super_mode(decoder_info_t *decoder_info, int size, int decode_this_si
   if (frame_type==I_FRAME){
     decoder_info->mode = MODE_INTRA;
     if (size > MIN_BLOCK_SIZE && decode_this_size)
+    {
+      THOR_TRACE_SE(stream, "split_flag");
       split_flag = getbits(stream, 1);
+    }
     else
       split_flag = !decode_this_size;
     return split_flag;
   }
   else{
     if (!decode_this_size) {
+      THOR_TRACE_SE(stream, "split_flag");
       split_flag = !getbits(stream, 1);
       return split_flag;
     }
   }
   if (size > MAX_TR_SIZE) {
+    THOR_TRACE_SE(stream, "split_flag");
     split_flag = !getbits(stream, 1);
     if (!split_flag)  decoder_info->mode = MODE_SKIP;
     return split_flag;
@@ -527,6 +595,7 @@ int decode_super_mode(decoder_info_t *decoder_info, int size, int decode_this_si
 
   int interp_ref = decoder_info->frame_info.interp_ref;
 
+  THOR_TRACE_SE_FORMAT(stream, "super_mode", TRACE_FORMAT_BIN);
   code = get_vlc0_limit(maxbit,stream);
 
   if (interp_ref) {
@@ -679,10 +748,14 @@ void process_block_dec(decoder_info_t *decoder_info,int size,int yposY,int xposY
 
   if (split_flag){
     int new_size = size/2;
+    THOR_TRACE_GROUP_START(stream, "coding_tree_unit", THOR_TRACE_TYPE_CODING_TREE);
+    
     process_block_dec(decoder_info,new_size,yposY+0*new_size,xposY+0*new_size);
     process_block_dec(decoder_info,new_size,yposY+1*new_size,xposY+0*new_size);
     process_block_dec(decoder_info,new_size,yposY+0*new_size,xposY+1*new_size);
     process_block_dec(decoder_info,new_size,yposY+1*new_size,xposY+1*new_size);
+    
+    THOR_TRACE_GROUP_END(stream);
   }
   else if (decode_this_size || decode_rectangular_size){
     decode_block(decoder_info,size,yposY,xposY);

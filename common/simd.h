@@ -78,7 +78,7 @@ SIMD_INLINE void thor_free(void *p)
   free(((void**)p)[-1]);
 }
 
-#elif __GNUC__
+#elif 0// __GNUC__
 
 SIMD_INLINE unsigned int log2i(uint32_t x)
 {

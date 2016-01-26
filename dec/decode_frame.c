@@ -32,6 +32,8 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "common_frame.h"
 #include "temporal_interp.h"
 #include "wt_matrix.h"
+#include "thor_trace.h"
+#include "thor_if.h"
 
 extern int chroma_qp[52];
 
@@ -39,8 +41,18 @@ static int clpf_true(int k, int l, yuv_frame_t *r, yuv_frame_t *o, const deblock
   return 1;
 }
 
-static int clpf_bit(int k, int l, yuv_frame_t *r, yuv_frame_t *o, const deblock_data_t *d, int s, void *stream) {
-  return getbits((stream_t*)stream, 1);
+static int clpf_bit(int k, int l, yuv_frame_t *r, yuv_frame_t *o, const deblock_data_t *d, int s, void *decoder_info)
+{
+  decoder_info_t* dec = (decoder_info_t*)decoder_info;
+  stream_t* stream = dec->stream;
+  int clpf_flag;
+
+  THOR_TRACE_SE(stream, "clpf_flag");
+  clpf_flag = getbits(stream, 1);
+
+  stream->trace.clpf_bits[k * (dec->width/MAX_BLOCK_SIZE) + l] = clpf_flag;
+
+  return clpf_flag;
 }
 
 void decode_frame(decoder_info_t *decoder_info, yuv_frame_t* rec_buffer)
@@ -56,27 +68,37 @@ void decode_frame(decoder_info_t *decoder_info, yuv_frame_t* rec_buffer)
   int bit_start = stream->bitcnt;
   int rec_buffer_idx;
 
+  THOR_TRACE_GROUP_START(stream, "frame", THOR_TRACE_TYPE_FRAME);
+  
+  THOR_TRACE_SE(stream, "frame_type");
   decoder_info->frame_info.frame_type = getbits(stream,1);
   decoder_info->bit_count.stat_frame_type = decoder_info->frame_info.frame_type;
+  
+  THOR_TRACE_SE(stream, "qp");
   int qp = getbits(stream,8);
 
+  THOR_TRACE_SE(stream, "num_intra_modes");
   decoder_info->frame_info.num_intra_modes = getbits(stream,4);
 
   decoder_info->frame_info.interp_ref = 0;
   if (decoder_info->frame_info.frame_type != I_FRAME) {
+    THOR_TRACE_SE(stream, "num_ref");
     decoder_info->frame_info.num_ref = getbits(stream,2)+1;
     int r;
     for (r=0;r<decoder_info->frame_info.num_ref;r++){
+      THOR_TRACE_SE(stream, "ref_array");
       decoder_info->frame_info.ref_array[r] = getbits(stream,6)-1;
       if (decoder_info->frame_info.ref_array[r]==-1)
         decoder_info->frame_info.interp_ref = 1;
     }
     if (decoder_info->frame_info.num_ref==2 && decoder_info->frame_info.ref_array[0]==-1) {
+      THOR_TRACE_SE(stream, "ref_array");
       decoder_info->frame_info.ref_array[decoder_info->frame_info.num_ref++] = getbits(stream,5)-1;
     }
   } else {
     decoder_info->frame_info.num_ref = 0;
   }
+  THOR_TRACE_SE(stream, "display_frame_num");
   decoder_info->frame_info.display_frame_num = getbits(stream,16);
   for (r=0; r<decoder_info->frame_info.num_ref; ++r){
     if (decoder_info->frame_info.ref_array[r]!=-1) {
@@ -115,27 +137,59 @@ void decode_frame(decoder_info_t *decoder_info, yuv_frame_t* rec_buffer)
   decoder_info->frame_info.qp = qp;
   decoder_info->frame_info.qpb = qp;
 
+  if (decoder_info->decoding_mode < THOR_DEC_MODE_HEADER)
+  {
   for (k=0;k<num_sb_ver;k++){
     for (l=0;l<num_sb_hor;l++){
       int xposY = l*MAX_BLOCK_SIZE;
       int yposY = k*MAX_BLOCK_SIZE;
+      
+      THOR_TRACE_MSG(stream, "-- CTU (%d, %d)\n", xposY, yposY);
+
+      THOR_TRACE_GROUP_START(stream, "coding_tree_unit", THOR_TRACE_TYPE_CODING_TREE);
+      
       process_block_dec(decoder_info,MAX_BLOCK_SIZE,yposY,xposY);
+      
+      THOR_TRACE_GROUP_END(stream);
+
+      if (stream->trace.callback[THOR_DEC_CB_CTU].fn != NULL)
+           ((ThorCallbackCTUFn)stream->trace.callback[THOR_DEC_CB_CTU].fn)(decoder_info, xposY, yposY, MAX_BLOCK_SIZE, MAX_BLOCK_SIZE, stream->trace.callback[THOR_DEC_CB_CTU].param);
     }
   }
 
   qp = decoder_info->frame_info.qp = decoder_info->frame_info.qpb;
 
-  if (decoder_info->deblocking){
-    deblock_frame_y(decoder_info->rec, decoder_info->deblock_data, width, height, qp);
-    int qpc = chroma_qp[qp];
-    deblock_frame_uv(decoder_info->rec, decoder_info->deblock_data, width, height, qpc);
+  if (decoder_info->decoding_mode == THOR_DEC_MODE_FULL)
+  {
+    if (decoder_info->deblocking){
+      deblock_frame_y(decoder_info->rec, decoder_info->deblock_data, width, height, qp);
+      int qpc = chroma_qp[qp];
+      deblock_frame_uv(decoder_info->rec, decoder_info->deblock_data, width, height, qpc);
+    }
   }
 
-  if (decoder_info->clpf && getbits(stream, 1)){
-    clpf_frame(decoder_info->rec, 0, decoder_info->deblock_data, stream,
-               getbits(stream, 1) ? clpf_true : clpf_bit);
+  
+  if (decoder_info->clpf)
+  {
+    THOR_TRACE_SE(stream, "clpf_frame");
+    decoder_info->frame_info.clpf_frame = getbits(stream, 1);
+    if (decoder_info->frame_info.clpf_frame)
+    {
+      int clpf_all;
+
+      THOR_TRACE_GROUP_START(stream, "clpf_bits", THOR_TRACE_TYPE_CLPF);
+      
+      THOR_TRACE_SE(stream, "clpf_all");
+      clpf_all = getbits(stream, 1);
+
+      clpf_frame(decoder_info->rec, 0, decoder_info->deblock_data, decoder_info,
+                 clpf_all ? clpf_true : clpf_bit);
+                 
+      THOR_TRACE_GROUP_END(stream);
+    }
   }
 
+  }
   /* Sliding window operation for reference frame buffer by circular buffer */
 
   /* Store pointer to reference frame that is shifted out of reference buffer */
@@ -147,8 +201,20 @@ void decode_frame(decoder_info_t *decoder_info, yuv_frame_t* rec_buffer)
   /* Set ref[0] to the memory slot where the new current reconstructed frame wil replace reference frame being shifted out */
   decoder_info->ref[0] = tmp;
 
-  /* Pad the reconstructed frame and write into ref[0] */
-  create_reference_frame(decoder_info->ref[0],decoder_info->rec);
+  if (decoder_info->decoding_mode == THOR_DEC_MODE_FULL)
+  {
+    /* Pad the reconstructed frame and write into ref[0] */
+    create_reference_frame(decoder_info->ref[0],decoder_info->rec);
+  }
+  else
+  {
+    decoder_info->ref[0]->frame_num = decoder_info->rec->frame_num;
+  }
+
+  THOR_TRACE_GROUP_END(stream);
+
+  if (stream->trace.callback[THOR_DEC_CB_FRAME_COMPLETE].fn != NULL)
+      ((ThorCallbackFrameFn)stream->trace.callback[THOR_DEC_CB_FRAME_COMPLETE].fn)(decoder_info, stream->bitcnt, stream->trace.callback[THOR_DEC_CB_FRAME_COMPLETE].param);
 }
 
 

@@ -37,6 +37,8 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "getvlc.h"
 #include "common_block.h"
 #include "inter_prediction.h"
+#include "thor_trace.h"
+#include "thor_if.h"
 
 extern int zigzag16[16];
 extern int zigzag64[64];
@@ -48,13 +50,17 @@ void read_mv(stream_t *stream,mv_t *mv,mv_t *mvp)
     mv_t mvd;
     int code;
 
+    THOR_TRACE_SE(stream, "mvdx");
     code = get_vlc(10,stream);
     mvd.x = code&1 ? -((code+1)/2) : code/2;
     mv->x = mvp->x + mvd.x;
-
+    THOR_TRACE_VAL(stream, mvd.x);
+    
+    THOR_TRACE_SE(stream, "mvdy");
     code = get_vlc(10,stream);
     mvd.y = code&1 ? -((code+1)/2) : code/2;
     mv->y = mvp->y + mvd.y;
+    THOR_TRACE_VAL(stream, mvd.y);
 }
 
 int YPOS,XPOS;
@@ -74,11 +80,15 @@ void read_coeff(stream_t *stream,int16_t *coeff,int size,int type){
   memset(scoeff,0,N*sizeof(int16_t));
   memset(coeff,0,size*size*sizeof(int16_t));
 
+  THOR_TRACE_GROUP_START(stream, "coeffs", THOR_TRACE_TYPE_RESIDUAL);
+
   pos = 0;
   /* Use one bit to signal chroma/last_pos=1/level=1 */
   if (chroma_flag==1){
+    THOR_TRACE_SE(stream, "level");
     int tmp = getbits1(stream);
     if (tmp){
+      THOR_TRACE_SE(stream, "sign");
       sign = getbits1(stream);
       scoeff[pos] = sign ? -1 : 1;
       pos = N;
@@ -92,8 +102,10 @@ void read_coeff(stream_t *stream,int16_t *coeff,int size,int type){
     if (level_mode){
       /* Level-mode */
       while (pos < N && level > 0){
+        THOR_TRACE_SE(stream, "level");
         level = get_vlc(vlc_adaptive,stream);
         if (level){
+          THOR_TRACE_SE(stream, "sign");
           sign = getbits1(stream);
         }
         else{
@@ -112,6 +124,7 @@ void read_coeff(stream_t *stream,int16_t *coeff,int size,int type){
     /* Run-mode */
     int eob;
     int eob_pos = chroma_flag ? 0 : 2;
+    THOR_TRACE_SE(stream, "run");
     if (chroma_flag && size <= 8) {
       vlc = 10;
       code = get_vlc(vlc, stream);
@@ -139,12 +152,14 @@ void read_coeff(stream_t *stream,int16_t *coeff,int size,int type){
 
     /* Decode level and sign */
     if (levelFlag){
+      THOR_TRACE_SE(stream, "level/sign");
       tmp = get_vlc(0,stream);
       sign = tmp&1;
       level = (tmp>>1)+2;
     }
     else{
       level = 1;
+      THOR_TRACE_SE(stream, "sign");
       sign = getbits1(stream);
     }
     scoeff[pos] = sign ? -level : level;
@@ -166,15 +181,23 @@ void read_coeff(stream_t *stream,int16_t *coeff,int size,int type){
       coeff[i*size+j] = scoeff[zigzagptr[i*qsize+j]];
     }
   }
+  
+  THOR_TRACE_GROUP_END(stream);
 }
 
 int read_delta_qp(stream_t *stream){
+
+  THOR_TRACE_SE(stream, "delta_qp");
+
   int abs_delta_qp,sign_delta_qp,delta_qp;
   sign_delta_qp = 0;
   abs_delta_qp = get_vlc(0,stream);
   if (abs_delta_qp > 0)
     sign_delta_qp = getbits(stream,1);
   delta_qp = sign_delta_qp ? -abs_delta_qp : abs_delta_qp;
+  
+  THOR_TRACE_VAL(stream, delta_qp);
+    
   return delta_qp;
 }
 int read_block(decoder_info_t *decoder_info,stream_t *stream,block_info_dec_t *block_info, frame_type_t frame_type)
@@ -219,6 +242,10 @@ int read_block(decoder_info_t *decoder_info,stream_t *stream,block_info_dec_t *b
   /* Initialize bit counter for statistical purposes */
   bit_start = stream->bitcnt;
 
+  THOR_TRACE_MSG(stream, "-- Block (%d, %d)\n", xpos, ypos);
+
+  THOR_TRACE_GROUP_START(stream, "block", THOR_TRACE_TYPE_BLOCK);
+  
   if (mode == MODE_SKIP){
     /* Derive skip vector candidates and number of skip vector candidates from neighbour blocks */
     mv_t mv_skip[MAX_NUM_SKIP];
@@ -230,6 +257,7 @@ int read_block(decoder_info_t *decoder_info,stream_t *stream,block_info_dec_t *b
       mv_skip[idx] = skip_candidates[idx].mv0;
     }
     /* Decode skip index */
+    THOR_TRACE_SE(stream, "skip_idx");
     if (num_skip_vec == 4)
       skip_idx = getbits(stream,2);
     else if (num_skip_vec == 3){
@@ -244,6 +272,8 @@ int read_block(decoder_info_t *decoder_info,stream_t *stream,block_info_dec_t *b
     }
     else
       skip_idx = 0;
+    THOR_TRACE_VAL(stream, skip_idx);
+    
     decoder_info->bit_count.skip_idx[stat_frame_type] += (stream->bitcnt - bit_start);
 
     block_info->num_skip_vec = num_skip_vec;
@@ -276,6 +306,7 @@ int read_block(decoder_info_t *decoder_info,stream_t *stream,block_info_dec_t *b
       mv_skip[idx] = merge_candidates[idx].mv0;
     }
     /* Decode skip index */
+    THOR_TRACE_SE(stream, "skip_idx");
     if (num_skip_vec == 4)
       skip_idx = getbits(stream,2);
     else if (num_skip_vec == 3){
@@ -290,6 +321,8 @@ int read_block(decoder_info_t *decoder_info,stream_t *stream,block_info_dec_t *b
     }
     else
       skip_idx = 0;
+    THOR_TRACE_VAL(stream, skip_idx);
+    
     decoder_info->bit_count.skip_idx[stat_frame_type] += (stream->bitcnt - bit_start);
 
     block_info->num_skip_vec = num_skip_vec;
@@ -317,6 +350,7 @@ int read_block(decoder_info_t *decoder_info,stream_t *stream,block_info_dec_t *b
 
     if (decoder_info->pb_split){
       /* Decode PU partition */
+      THOR_TRACE_SE(stream, "pb_part");
       tmp = getbits(stream,1);
       if (tmp==1){
         code = 0;
@@ -332,6 +366,7 @@ int read_block(decoder_info_t *decoder_info,stream_t *stream,block_info_dec_t *b
         }
       }
       pb_part = code;
+      THOR_TRACE_VAL(stream, pb_part);
     }
     else{
       pb_part = 0;
@@ -394,6 +429,7 @@ int read_block(decoder_info_t *decoder_info,stream_t *stream,block_info_dec_t *b
 #if BIPRED_PART
     if (decoder_info->pb_split) {
       /* Decode PU partition */
+      THOR_TRACE_SE("pb_part");
       tmp = getbits(stream, 1);
       if (tmp == 1) {
         code = 0;
@@ -409,6 +445,7 @@ int read_block(decoder_info_t *decoder_info,stream_t *stream,block_info_dec_t *b
         }
       }
       pb_part = code;
+      THOR_TRACE_VAL(pb_part);
     }
     else {
       pb_part = 0;
@@ -469,6 +506,7 @@ int read_block(decoder_info_t *decoder_info,stream_t *stream,block_info_dec_t *b
       }
     }
     else{
+      THOR_TRACE_SE_FORMAT(stream, "ref_idx", TRACE_FORMAT_BIN);
       if (decoder_info->frame_info.num_ref == 2) {
         int code = get_vlc0_limit(3, stream);
         block_info->block_param.ref_idx0 = (code >> 1) & 1;
@@ -488,6 +526,7 @@ int read_block(decoder_info_t *decoder_info,stream_t *stream,block_info_dec_t *b
 
   else if (mode==MODE_INTRA){
     /* Decode intra prediction mode */
+    THOR_TRACE_SE(stream, "intra_mode");
     if (decoder_info->frame_info.num_intra_modes<=4){
       intra_mode = getbits(stream,2);
     }
@@ -534,7 +573,9 @@ int read_block(decoder_info_t *decoder_info,stream_t *stream,block_info_dec_t *b
       }
       intra_mode = intra_mode_map_inv[code];
     }
-
+    
+    THOR_TRACE_VAL(stream, intra_mode);
+      
     decoder_info->bit_count.intra_mode[stat_frame_type] += (stream->bitcnt - bit_start);
     decoder_info->bit_count.size_and_intra_mode[stat_frame_type][log2i(size)-3][intra_mode] += 1;
 
@@ -553,6 +594,7 @@ int read_block(decoder_info_t *decoder_info,stream_t *stream,block_info_dec_t *b
     int cbp_table[8] = {1,0,5,2,6,3,7,4};
 
     bit_start = stream->bitcnt;
+    THOR_TRACE_SE_FORMAT(stream, "cbp", TRACE_FORMAT_BIN);
     code = get_vlc(0,stream);
 
     if (decoder_info->tb_split_enable && (mode == MODE_INTRA || mode == MODE_INTER)) {
@@ -588,6 +630,7 @@ int read_block(decoder_info_t *decoder_info,stream_t *stream,block_info_dec_t *b
       cbp.u = ((cbp2>>1)&1);
       cbp.v = ((cbp2>>2)&1);
       block_info->cbp = cbp;
+      THOR_TRACE_VAL(stream, cbp2);
 
       if (cbp.y){
         bit_start = stream->bitcnt;
@@ -621,6 +664,7 @@ int read_block(decoder_info_t *decoder_info,stream_t *stream,block_info_dec_t *b
         /* Loop over 4 TUs */
         for (index=0;index<4;index++){
           bit_start = stream->bitcnt;
+          THOR_TRACE_SE_FORMAT(stream, "cbp", TRACE_FORMAT_BIN);
           code = get_vlc(0,stream);
           int tmp = 0;
           while (code != cbp_table[tmp] && tmp < 8) tmp++;
@@ -629,7 +673,8 @@ int read_block(decoder_info_t *decoder_info,stream_t *stream,block_info_dec_t *b
           cbp.y = ((tmp>>0)&1);
           cbp.u = ((tmp>>1)&1);
           cbp.v = ((tmp>>2)&1);
-
+          THOR_TRACE_VAL(stream, tmp);
+          
           /* Updating statistics for CBP */
           decoder_info->bit_count.cbp[stat_frame_type] += (stream->bitcnt - bit_start);
           decoder_info->bit_count.cbp_stat[stat_frame_type][cbp.y + (cbp.u<<1) + (cbp.v<<2)] += 1;
@@ -680,6 +725,7 @@ int read_block(decoder_info_t *decoder_info,stream_t *stream,block_info_dec_t *b
         /* Loop over 4 TUs */
         for (index=0;index<4;index++){
           bit_start = stream->bitcnt;
+          THOR_TRACE_SE(stream, "cbp_y");
           cbp.y = getbits(stream,1);
           decoder_info->bit_count.cbp[stat_frame_type] += (stream->bitcnt - bit_start);
 
@@ -697,6 +743,7 @@ int read_block(decoder_info_t *decoder_info,stream_t *stream,block_info_dec_t *b
 
         bit_start = stream->bitcnt;
         int tmp;
+        THOR_TRACE_SE_FORMAT(stream, "cpb_uv", TRACE_FORMAT_BIN);
         tmp = getbits(stream,1);
         if (tmp){
           cbp.u = cbp.v = 0;
@@ -719,6 +766,8 @@ int read_block(decoder_info_t *decoder_info,stream_t *stream,block_info_dec_t *b
             }
           }
         }
+        THOR_TRACE_VAL(stream, (cbp.u << 1) | cbp.v);
+        
         decoder_info->bit_count.cbp[stat_frame_type] += (stream->bitcnt - bit_start);
         if (cbp.u){
           bit_start = stream->bitcnt;
@@ -775,5 +824,11 @@ int read_block(decoder_info_t *decoder_info,stream_t *stream,block_info_dec_t *b
   decoder_info->bit_count.mode[stat_frame_type][mode] += (bwidth/MIN_BLOCK_SIZE * bheight/MIN_BLOCK_SIZE);
   decoder_info->bit_count.size[stat_frame_type][log2i(size)-3] += (bwidth/MIN_BLOCK_SIZE * bheight/MIN_BLOCK_SIZE);
   decoder_info->bit_count.size_and_mode[stat_frame_type][log2i(size)-3][mode] += (bwidth/MIN_BLOCK_SIZE * bheight/MIN_BLOCK_SIZE);
+
+  THOR_TRACE_GROUP_END(stream);
+
+  if (stream->trace.callback[THOR_DEC_CB_BLOCK].fn != NULL)
+      ((ThorCallbackBlockFn)stream->trace.callback[THOR_DEC_CB_BLOCK].fn)(decoder_info, xpos, ypos, size, size, block_info, stream->trace.callback[THOR_DEC_CB_BLOCK].param);
+
   return 0;
 }

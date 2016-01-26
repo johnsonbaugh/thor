@@ -28,19 +28,33 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #define _GETBITS_H_
 
 #include <stdio.h>
+#include "thor_trace.h"
+
+#define DECVIEWER_BUFFER
 
 typedef struct
 {
+#ifdef DECVIEWER_BUFFER
+  st_thor_trace_state trace;
+#else
   FILE *infile;
   unsigned char rdbfr[2051];
   unsigned char *rdptr;
   unsigned int inbfr;
+#endif
   int incnt;
   int bitcnt;
   int length;
 } stream_t;
 
+#ifdef DECVIEWER_BUFFER
+void initbuffer(stream_t* stream, uint8_t* buf_ptr, uint32_t length);
+int morebits(stream_t* stream);
+void bytealign(stream_t* stream);
+void flush_frame(stream_t* stream);
+#else
 int initbits_dec(FILE *infile, stream_t *str);
+#endif
 int fillbfr(stream_t *str);
 unsigned int showbits(stream_t *str, int n);
 unsigned int getbits1(stream_t *str);
