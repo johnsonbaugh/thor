@@ -83,9 +83,10 @@ SIMD_INLINE void v128_store_unaligned(void *p, v128 a) {
 
 #if defined(__OPTIMIZE__)
 #if defined (__SSSE3__)
-SIMD_INLINE v128 v128_align(v128 a, v128 b, const unsigned int c) {
-  return c ? _mm_alignr_epi8(a, b, c) : b;
-}
+#define v128_align(a, b, c) ((c) ? _mm_alignr_epi8(a, b, c) : (b))
+//SIMD_INLINE v128 v128_align(v128 a, v128 b, const unsigned int c) {
+//  return c ? _mm_alignr_epi8(a, b, c) : b;
+//}
 #else
 #define v128_align(a, b, c) ((c) ? _mm_or_si128(_mm_srli_si128(b, c), _mm_slli_si128(a, 16 - (c))) : (b))
 #endif

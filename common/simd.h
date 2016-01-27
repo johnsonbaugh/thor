@@ -78,7 +78,15 @@ SIMD_INLINE void thor_free(void *p)
   free(((void**)p)[-1]);
 }
 
-#elif 0// __GNUC__
+#elif __clang__
+
+#define log2i(x) (31 - __builtin_clz(x))
+
+#define thor_alloc(size, align) ((void*)((((uintptr_t)__builtin_alloca((size) + (align))) + (align) - 1) & ~((align) - 1)))
+
+SIMD_INLINE void thor_free(void *p) {}
+
+#elif  __GNUC__
 
 SIMD_INLINE unsigned int log2i(uint32_t x)
 {
