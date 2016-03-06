@@ -49,3 +49,5 @@ HEADERS += \
     ../../common/temporal_interp.h
 
 INCLUDEPATH += ../../common
+
+win32: DEFINES += "VS_2015=1"

@@ -68,7 +68,7 @@ int morebits(stream_t* stream)
     st_thor_buffer* buffer = &stream->trace.buffer;
     st_thor_buffer_segment* segment = &buffer->segment[buffer->active_segment];
 
-    return (!buffer->end_of_stream || buffer->read_segment != buffer->active_segment || segment->bits_remaining >= 8); /* >= 8 instead of 0 because frames are not byte-aligned. */
+    return (!buffer->end_of_stream || buffer->read_segment != buffer->active_segment || segment->bits_remaining > 0);
 }
 
 unsigned int getbits(stream_t *stream, int bits)
@@ -195,7 +195,11 @@ static void NextSegment(stream_t* stream)
         buffer->end_of_stream = ((ThorCallbackBufferFn)stream->trace.callback[THOR_DEC_CB_BUFFER].fn)(stream->trace.handle, &seg->buf_ptr, &seg->segment_length, &seg->segment_id, stream->trace.callback[THOR_DEC_CB_BUFFER].param);
 
     if (seg->buf_ptr == NULL || seg->segment_length == 0)
+    {
         buffer->end_of_stream = 1;
+        if (buffer->read_segment == -1)
+            buffer->read_segment = 0;
+    }
     else
     {
         seg->byte_pos = 0;
