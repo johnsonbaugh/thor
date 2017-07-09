@@ -4,7 +4,7 @@ CONFIG -= app_bundle
 CONFIG -= qt
 CONFIG -= debug_and_release
 
-QMAKE_MAC_SDK = macosx10.11
+QMAKE_MAC_SDK = macosx10.12
 
 SOURCES += \
     ../../dec/decode_block.c \
