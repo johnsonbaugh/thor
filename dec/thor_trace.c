@@ -69,7 +69,10 @@ void ThorTrace_EndPos(st_thor_trace_state* trace)
 
 void ThorTrace_Bits(st_thor_trace_state* trace, uint32_t bits, uint32_t val)
 {
-    trace->bitString <<= bits;
+    if (bits == 32)
+        trace->bitString = 0;
+    else
+        trace->bitString <<= bits;
     trace->bitCount += (uint8_t)bits;
     trace->bitString |= val;
 
